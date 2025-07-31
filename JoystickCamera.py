@@ -102,6 +102,11 @@ class CameraUpdateHandler(adsk.core.CustomEventHandler):
                 # 現在のボタン状態を確認
                 current_button_states = getattr(shared_state, 'button_states', {})
                 
+                # デバッグ：ボタン状態のログ出力（押されているボタンがある場合のみ）
+                if config.DEBUG and any(current_button_states.values()):
+                    pressed_buttons = [str(i) for i, pressed in current_button_states.items() if pressed]
+                    futil.log(f"押されているボタン: {', '.join(pressed_buttons) if pressed_buttons else 'なし'}", adsk.core.LogLevels.InfoLogLevel)
+                
                 for button_index, function_name in config.BUTTON_ASSIGNMENTS.items():
                     if function_name == "none":
                         continue
@@ -112,10 +117,13 @@ class CameraUpdateHandler(adsk.core.CustomEventHandler):
                     
                     # ボタンが押された瞬間（前回False、今回True）の場合のみ機能を実行
                     if current_pressed and not prev_pressed:
-                        # デバッグ用：実際の function_name の値を表示
+                        # ボタン押下を検出
                         futil.log(f"ボタン {button_index} が押されました。機能コード '{function_name}' を実行します。", adsk.core.LogLevels.InfoLogLevel)
-                        futil.log(f"DEBUG: BUTTON_ASSIGNMENTS = {config.BUTTON_ASSIGNMENTS}", adsk.core.LogLevels.InfoLogLevel)
-                        self.camera_controller.execute_button_function(function_name)
+                        try:
+                            self.camera_controller.execute_button_function(function_name)
+                            futil.log(f"ボタン {button_index} の機能 '{function_name}' の実行が完了しました。", adsk.core.LogLevels.InfoLogLevel)
+                        except Exception as e:
+                            futil.log(f"ボタン {button_index} の機能実行中にエラーが発生: {str(e)}", adsk.core.LogLevels.ErrorLogLevel)
                 
                 # 前回の状態を更新
                 self.prev_button_states = current_button_states.copy()

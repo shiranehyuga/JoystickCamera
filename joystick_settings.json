@@ -12,21 +12,17 @@
   "AUTO_RESET_ENABLED": false,
   "AUTO_RESET_INTERVAL": 60,
   "BUTTON_ASSIGNMENTS": {
-    "0": "viewcube_front",
-    "1": "viewcube_bottom",
-    "2": "viewcube_left",
-    "3": "viewcube_right",
-    "4": "nearest_viewcube",
-    "5": "nearest_viewcube",
-    "6": "nearest_viewcube",
+    "1": "smart_rotate_right",
+    "2": "smart_rotate_left",
+    "6": "home_view",
     "8": "nearest_viewcube"
   },
   "BUTTON_ENABLED": true,
   "DPAD_ASSIGNMENTS": {
-    "dpad_up": "smart_rotate_up",
-    "dpad_down": "smart_rotate_down",
-    "dpad_left": "smart_rotate_left",
-    "dpad_right": "smart_rotate_right"
+    "dpad_up": "smart_rotate_down",
+    "dpad_down": "smart_rotate_up",
+    "dpad_left": "smart_rotate_clockwise",
+    "dpad_right": "smart_rotate_counter_clockwise"
   },
   "DPAD_ENABLED": true
 }

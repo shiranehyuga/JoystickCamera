@@ -63,248 +63,75 @@ class CameraController:
     def update_camera_position(joystick_x: float, joystick_y: float) -> None:
         try:
             # 入力がほぼゼロの場合は処理をスキップ（パフォーマンス向上）
-            if abs(joystick_x) < 0.001 and abs(joystick_y) < 0.001:
+            if abs(joystick_x) < 0.005 and abs(joystick_y) < 0.005:  # 閾値を上げてさらに軽量化
                 return
-            
-            # デバッグモードがオンの場合のみ表示
-            if config.DEBUG and (abs(joystick_x) > 0.5 or abs(joystick_y) > 0.5):
-                futil.log(f'Joystick input - X: {joystick_x:.4f}, Y: {joystick_y:.4f}')
             
             camera: adsk.core.Camera = app.activeViewport.camera
             if not camera:
-                futil.log('No active camera found.')
                 return
 
-            # カメラの滑らかな遷移を無効化（ログなし）
+            # カメラの滑らかな遷移を無効化
             camera.isSmoothTransition = False
             
             eye: adsk.core.Point3D = camera.eye
             target: adsk.core.Point3D = camera.target
             up: adsk.core.Vector3D = camera.upVector
 
-            # ベクトル計算 - 入力をスケーリングして小さくする
-            rotation_scale = CameraController.rotation_scale * 0.5  # 回転スケールを半分に
+            # シンプルな回転スケール計算
+            rotation_scale = CameraController.rotation_scale * 0.3  # さらに縮小して軽量化
             
-            # 入力値にさらに非線形処理を適用して大きな動きを抑制
-            joystick_x_scaled = joystick_x * abs(joystick_x) * rotation_scale  
-            joystick_y_scaled = joystick_y * abs(joystick_y) * rotation_scale
+            # 単純な線形スケーリング（非線形処理を削除）
+            joystick_x_scaled = joystick_x * rotation_scale
+            joystick_y_scaled = joystick_y * rotation_scale
             
+            # 視線方向とright方向の計算（シンプル化）
             forward: adsk.core.Vector3D = target.vectorTo(eye)
             forward.normalize()
-
-            # 安全なrightベクトルの計算（ViewCubeコーナー対応）
+            
             right: adsk.core.Vector3D = forward.crossProduct(up)
-            
-            # rightベクトルの長さをチェックして特異点を検出
-            right_length = right.length
-            if right_length < 0.01:  # ほぼゼロの場合（特異点）
-                # 代替のrightベクトルを計算
-                world_z_axis = adsk.core.Vector3D.create(0, 0, 1)
-                world_x_axis = adsk.core.Vector3D.create(1, 0, 0)
-                world_y_axis = adsk.core.Vector3D.create(0, 1, 0)
-                
-                # forwardと最も垂直に近い世界軸を見つける
-                x_dot = abs(forward.dotProduct(world_x_axis))
-                y_dot = abs(forward.dotProduct(world_y_axis))
-                z_dot = abs(forward.dotProduct(world_z_axis))
-                
-                # 最も垂直に近い軸を使用してrightベクトルを計算
-                if x_dot < y_dot and x_dot < z_dot:
-                    right = forward.crossProduct(world_x_axis)
-                elif y_dot < z_dot:
-                    right = forward.crossProduct(world_y_axis)
-                else:
-                    right = forward.crossProduct(world_z_axis)
-                
-                # 再度長さをチェック
-                if right.length < 0.01:
-                    # すべて失敗した場合は、upベクトルと垂直な任意のベクトルを使用
-                    if abs(up.x) < 0.9:
-                        right = adsk.core.Vector3D.create(1, 0, 0)
-                    else:
-                        right = adsk.core.Vector3D.create(0, 1, 0)
-                
-                if config.DEBUG:
-                    futil.log(f'ViewCube角での特異点を検出、代替rightベクトルを使用: length={right_length:.6f}', adsk.core.LogLevels.InfoLogLevel)
-            
-            right.normalize()
-
-            # ViewCube角での安全な回転処理
-            # 複数の特異点を検出して適切な回転軸を選択
-            world_z_axis = adsk.core.Vector3D.create(0, 0, 1)
-            world_x_axis = adsk.core.Vector3D.create(1, 0, 0)
-            world_y_axis = adsk.core.Vector3D.create(0, 1, 0)
-            
-            # 視線方向と各世界軸との内積を計算
-            forward_x_dot = abs(forward.dotProduct(world_x_axis))
-            forward_y_dot = abs(forward.dotProduct(world_y_axis))
-            forward_z_dot = abs(forward.dotProduct(world_z_axis))
-            
-            # upベクトルと各世界軸との内積も計算
-            up_x_dot = abs(up.dotProduct(world_x_axis))
-            up_y_dot = abs(up.dotProduct(world_y_axis))
-            up_z_dot = abs(up.dotProduct(world_z_axis))
-            
-            # 特異点の検出（任意の軸に対して80%以上平行）
-            singularity_threshold = 0.8
-            is_forward_singular = (forward_x_dot > singularity_threshold or 
-                                 forward_y_dot > singularity_threshold or 
-                                 forward_z_dot > singularity_threshold)
-            is_up_singular = (up_x_dot > singularity_threshold or 
-                            up_y_dot > singularity_threshold or 
-                            up_z_dot > singularity_threshold)
-            
-            # ViewCube角での特異点処理
-            if is_forward_singular or is_up_singular or right_length < 0.05:
-                # 特異点付近では、世界座標軸を使用した安全な回転
-                # デバッグログの頻度制限（10回に1回のみ表示）
-                if config.DEBUG and not hasattr(CameraController, '_debug_counter'):
-                    CameraController._debug_counter = 0
-                if config.DEBUG:
-                    CameraController._debug_counter += 1
-                    if CameraController._debug_counter % 10 == 1:  # 10回に1回のみログ出力
-                        futil.log(f'ViewCube角特異点検出中 (#{CameraController._debug_counter})', adsk.core.LogLevels.InfoLogLevel)
-                
-                # 入力スケールを大幅に縮小して安定化
-                safe_x_scale = joystick_x_scaled * 0.1
-                safe_y_scale = joystick_y_scaled * 0.1
-                
-                # 世界座標軸を使用した単純な回転
-                q_vertical: Quaternion = Quaternion.from_axis_angle(world_x_axis, safe_y_scale)
-                q_horizontal: Quaternion = Quaternion.from_axis_angle(world_z_axis, -safe_x_scale)
-                
-            elif getattr(config, 'USE_Z_AXIS_ROTATION', False):
-                # Z軸回転モード（特異点でない場合）
-                if forward_z_dot > 0.95:  # Z軸特異点付近
-                    # Z軸特異点付近では通常回転
-                    q_vertical: Quaternion = Quaternion.from_axis_angle(right, joystick_y_scaled)
-                    q_horizontal: Quaternion = Quaternion.from_axis_angle(up, -joystick_x_scaled)
-                    
-                    if config.DEBUG:
-                        futil.log(f'Z軸特異点付近のため通常回転モードを使用 (Z軸内積: {forward_z_dot:.3f})', adsk.core.LogLevels.InfoLogLevel)
-                else:
-                    # 通常のZ軸回転処理
-                    z_direction = 1 if up.dotProduct(world_z_axis) >= 0 else -1
-                    
-                    q_vertical: Quaternion = Quaternion.from_axis_angle(right, joystick_y_scaled)
-                    q_horizontal: Quaternion = Quaternion.from_axis_angle(world_z_axis, z_direction * -joystick_x_scaled)
-                    
-                    if config.DEBUG and abs(joystick_x) > 0.5:
-                        futil.log(f'Z軸回転モード - Z方向: {z_direction}', adsk.core.LogLevels.InfoLogLevel)
+            # rightベクトルが無効な場合のみ簡単な修正
+            if right.length < 0.001:
+                right = adsk.core.Vector3D.create(1, 0, 0)  # X軸を使用
             else:
-                # 通常モード（特異点でない場合）
+                right.normalize()
+
+            # シンプルな回転処理（特異点検出なし）
+            if getattr(config, 'USE_Z_AXIS_ROTATION', False):
+                # Z軸回転モード：シンプル版
+                world_z_axis = adsk.core.Vector3D.create(0, 0, 1)
+                z_direction = 1 if up.dotProduct(world_z_axis) >= 0 else -1
+                
+                q_vertical: Quaternion = Quaternion.from_axis_angle(right, joystick_y_scaled)
+                q_horizontal: Quaternion = Quaternion.from_axis_angle(world_z_axis, z_direction * -joystick_x_scaled)
+            else:
+                # 通常モード：シンプル版
                 q_vertical: Quaternion = Quaternion.from_axis_angle(right, joystick_y_scaled)
                 q_horizontal: Quaternion = Quaternion.from_axis_angle(up, -joystick_x_scaled)
 
             # 回転を結合
             q: Quaternion = q_horizontal * q_vertical
 
-            # Rotate the eye position around the target
-            eye_vector: adsk.core.Vector3D = target.vectorTo(eye)  # 方向を修正
+            # eye位置の回転
+            eye_vector: adsk.core.Vector3D = target.vectorTo(eye)
             rotated_eye_vector: adsk.core.Vector3D = q.transform_vector(eye_vector)
             new_eye: adsk.core.Point3D = target.copy()
             new_eye.translateBy(rotated_eye_vector)
 
-            # upベクトルの安全な更新処理
-            if is_forward_singular or is_up_singular or right_length < 0.05:
-                # 特異点付近では既存のupベクトルを維持して安定化
-                # 小さな調整のみ適用
-                adjustment_factor = 0.05
-                temp_up = q.transform_vector(up)
-                
-                # 既存のupベクトルと変換後のupベクトンをブレンド
-                rotated_up = adsk.core.Vector3D.create(
-                    up.x * (1 - adjustment_factor) + temp_up.x * adjustment_factor,
-                    up.y * (1 - adjustment_factor) + temp_up.y * adjustment_factor,
-                    up.z * (1 - adjustment_factor) + temp_up.z * adjustment_factor
-                )
-                rotated_up.normalize()
-                
-                # デバッグログは100回に1回のみ（さらに頻度制限）
-                if config.DEBUG and hasattr(CameraController, '_debug_counter') and CameraController._debug_counter % 100 == 1:
-                    futil.log(f'upベクトル安定化処理中', adsk.core.LogLevels.InfoLogLevel)
-            else:
-                # 通常時の処理
-                rotated_up: adsk.core.Vector3D = q.transform_vector(up)
-            
-            # Z軸回転モードの場合、ジョイスティック入力があるときのみ画面垂直方向の傾きを補正
-            if getattr(config, 'USE_Z_AXIS_ROTATION', False) and (abs(joystick_x) > 0.01 or abs(joystick_y) > 0.01):
-                # 視線方向ベクトルを取得
-                view_direction = new_eye.vectorTo(target)
-                view_direction.normalize()
-                
-                # ワールドZ軸
-                world_z_axis = adsk.core.Vector3D.create(0, 0, 1)
-                
-                # Z軸特異点（ジンバルロック）の検出
-                # 視線方向がZ軸とほぼ平行な場合
-                import math
-                dot_with_z = abs(view_direction.dotProduct(world_z_axis))
-                is_near_singularity = dot_with_z > 0.95  # 約18度以内
-                
-                if not is_near_singularity:
-                    # 通常時のみ傾き補正を実行
-                    # 現在の傾きを検査（視線方向とワールドZ軸に垂直な平面での右方向ベクトルを計算）
-                    ideal_right = view_direction.crossProduct(world_z_axis)
-                    
-                    # 外積の長さが十分大きい場合のみ処理
-                    if ideal_right.length > 0.1:
-                        ideal_right.normalize()
-                        
-                        # 理想的なupベクトル（傾きなし）を計算
-                        ideal_up = ideal_right.crossProduct(view_direction)
-                        ideal_up.normalize()
-                        
-                        # 上下反転時は理想的なupベクトルの向きを調整
-                        if view_direction.dotProduct(world_z_axis) < -0.9:  # ほぼ下を向いている
-                            ideal_up.scaleBy(-1)  # upベクトルを反転
-                        
-                        # 現在のupベクトルと理想的なupベクトルの角度差を計算して傾きを判定
-                        dot_product = rotated_up.dotProduct(ideal_up)
-                        angle_diff = abs(1.0 - dot_product)  # 1に近いほど傾きが少ない
-                        
-                        # 傾きがデッドゾーン閾値の2倍以上ある場合のみ補正（閾値を上げて過敏な反応を抑制）
-                        deadzone_threshold = getattr(config, 'DEAD_ZONE', 0.1) * 2.0
-                        if angle_diff > deadzone_threshold:
-                            # 急激な補正を避けるため、段階的に補正
-                            blend_factor = 0.3  # 30%ずつ理想値に近づける
-                            rotated_up.x = rotated_up.x * (1 - blend_factor) + ideal_up.x * blend_factor
-                            rotated_up.y = rotated_up.y * (1 - blend_factor) + ideal_up.y * blend_factor
-                            rotated_up.z = rotated_up.z * (1 - blend_factor) + ideal_up.z * blend_factor
-                            rotated_up.normalize()
-                            
-                            if config.DEBUG:
-                                futil.log(f'Z軸回転モード: 傾きを段階的に補正 (角度差: {angle_diff:.3f}, 閾値: {deadzone_threshold:.3f})', adsk.core.LogLevels.InfoLogLevel)
-                        elif config.DEBUG and angle_diff > deadzone_threshold * 0.5:
-                            futil.log(f'Z軸回転モード: 軽微な傾き検出 (角度差: {angle_diff:.3f}, 閾値: {deadzone_threshold:.3f}) - 補正なし', adsk.core.LogLevels.InfoLogLevel)
-                else:
-                    # 特異点付近では傾き補正を行わない
-                    if config.DEBUG:
-                        futil.log(f'Z軸回転モード: 特異点付近のため傾き補正をスキップ (Z軸との内積: {dot_with_z:.3f})', adsk.core.LogLevels.InfoLogLevel)
-            
-            # 極端な座標変化のチェック
-            if abs(new_eye.x) > 1000 or abs(new_eye.y) > 1000 or abs(new_eye.z) > 1000:
-                futil.log("Extreme position detected, skipping update", adsk.core.LogLevels.WarningLogLevel)
-                return
-                
-            # x,z座標の符号が急に変わる問題を検出
-            if eye.x * new_eye.x < 0 and eye.z * new_eye.z < 0:
-                futil.log("Sign flip detected in both X and Z axes, applying correction", adsk.core.LogLevels.WarningLogLevel)
-                # 動きを抑制
-                new_eye = eye.copy()
-                return
-                
+            # upベクトルの回転（シンプル版）
+            rotated_up: adsk.core.Vector3D = q.transform_vector(up)
+
             # カメラの新しい位置と向きを設定
             camera.eye = new_eye
             camera.upVector = rotated_up
-            camera.isSmoothTransition = False  # 滑らかな遷移を無効化
             app.activeViewport.camera = camera
             
-            # ビューポートの明示的な更新を強制（デバッグログに関わらず反映）
+            # 画面更新
             app.activeViewport.refresh()
 
-        except:
-            futil.log(f'Failed to update camera: {traceback.format_exc()}', adsk.core.LogLevels.ErrorLogLevel)
+        except Exception as e:
+            # エラーログも簡素化
+            if config.DEBUG:
+                futil.log(f'Camera update error: {str(e)}', adsk.core.LogLevels.ErrorLogLevel)
 
     def execute_button_function(self, function_name: str) -> None:
         """ボタンに割り当てられた機能を実行する"""
@@ -380,6 +207,18 @@ class CameraController:
             elif function_name == "smart_rotate_down":
                 self.smart_rotate_down()
                 futil.log("スマート下回転90度を実行しました", adsk.core.LogLevels.InfoLogLevel)
+            elif function_name == "rotate_screen_clockwise":
+                self.rotate_screen_clockwise()
+                futil.log("画面垂直時計回り90度を実行しました", adsk.core.LogLevels.InfoLogLevel)
+            elif function_name == "rotate_screen_counter_clockwise":
+                self.rotate_screen_counter_clockwise()
+                futil.log("画面垂直反時計回り90度を実行しました", adsk.core.LogLevels.InfoLogLevel)
+            elif function_name == "smart_rotate_clockwise":
+                self.smart_rotate_clockwise()
+                futil.log("スマート垂直時計回り90度を実行しました", adsk.core.LogLevels.InfoLogLevel)
+            elif function_name == "smart_rotate_counter_clockwise":
+                self.smart_rotate_counter_clockwise()
+                futil.log("スマート垂直反時計回り90度を実行しました", adsk.core.LogLevels.InfoLogLevel)
             else:
                 futil.log(f"未知の機能: {function_name}", adsk.core.LogLevels.WarningLogLevel)
                 return
@@ -433,6 +272,24 @@ class CameraController:
                 futil.log("No active camera found.", adsk.core.LogLevels.WarningLogLevel)
                 return
             
+            # 現在のviewOrientationを表示
+            current_orientation = camera.viewOrientation
+            orientation_names = {
+                adsk.core.ViewOrientations.ArbitraryViewOrientation: "任意の向き",
+                adsk.core.ViewOrientations.BackViewOrientation: "背面",
+                adsk.core.ViewOrientations.BottomViewOrientation: "下面", 
+                adsk.core.ViewOrientations.FrontViewOrientation: "前面",
+                adsk.core.ViewOrientations.IsoBottomLeftViewOrientation: "アイソ下左",
+                adsk.core.ViewOrientations.IsoBottomRightViewOrientation: "アイソ下右",
+                adsk.core.ViewOrientations.IsoTopLeftViewOrientation: "アイソ上左",
+                adsk.core.ViewOrientations.IsoTopRightViewOrientation: "アイソ上右",
+                adsk.core.ViewOrientations.LeftViewOrientation: "左面",
+                adsk.core.ViewOrientations.RightViewOrientation: "右面",
+                adsk.core.ViewOrientations.TopViewOrientation: "上面"
+            }
+            current_orientation_name = orientation_names.get(current_orientation, f"不明({current_orientation})")
+            futil.log(f"現在のviewOrientation: {current_orientation_name}({current_orientation})", adsk.core.LogLevels.InfoLogLevel)
+
             # カメラの視線方向ベクトルを取得（eyeからtargetへの方向）
             eye = camera.eye
             target = camera.target
@@ -460,21 +317,14 @@ class CameraController:
                     nearest_orientation = orientation
             
             # デバッグ情報をログ出力
-            orientation_names = {
-                adsk.core.ViewOrientations.FrontViewOrientation: "前面",
-                adsk.core.ViewOrientations.BackViewOrientation: "背面", 
-                adsk.core.ViewOrientations.LeftViewOrientation: "左面",
-                adsk.core.ViewOrientations.RightViewOrientation: "右面",
-                adsk.core.ViewOrientations.TopViewOrientation: "上面",
-                adsk.core.ViewOrientations.BottomViewOrientation: "下面"
-            }
-            
             selected_name = orientation_names.get(nearest_orientation, "不明")
             futil.log(f"現在の視線方向: [{view_direction.x:.3f}, {view_direction.y:.3f}, {view_direction.z:.3f}]", adsk.core.LogLevels.InfoLogLevel)
             futil.log(f"最寄りのViewCube面: {selected_name} (類似度: {max_dot_product:.3f})", adsk.core.LogLevels.InfoLogLevel)
             
             # 最寄りの面に移動
+            futil.log(f"最寄りのViewCube面 '{selected_name}' に移動を実行します", adsk.core.LogLevels.InfoLogLevel)
             self._set_viewcube_orientation(nearest_orientation)
+            futil.log(f"ViewCube面 '{selected_name}' への移動が完了しました", adsk.core.LogLevels.InfoLogLevel)
             
         except Exception as e:
             futil.log(f'最寄りのViewCube面への移動に失敗しました: {str(e)}', adsk.core.LogLevels.ErrorLogLevel)
@@ -489,23 +339,29 @@ class CameraController:
         self._rotate_screen_by_angle(-90.0)
     
     def smart_rotate_right(self) -> None:
-        """スマート右回転：ViewCube面でない場合は最寄り面に移動してから90度回転"""
-        if not self._is_on_viewcube_face():
-            futil.log("現在ViewCube面を向いていないため、最寄り面に移動してから回転します", adsk.core.LogLevels.InfoLogLevel)
+        """スマート右回転：ArbitraryViewOrientation（任意の向き）の場合は最寄り面に移動してから90度回転"""
+        is_on_face = self._is_on_viewcube_face()
+        if not is_on_face:
+            futil.log("現在任意の向き（ArbitraryViewOrientation）のため、最寄りViewCube面に移動してから右回転します", adsk.core.LogLevels.InfoLogLevel)
             self._move_to_nearest_viewcube_face()
             # 少し待ってから回転（カメラの移動完了を待つ）
             import time
             time.sleep(0.1)
+        else:
+            futil.log("現在標準ViewCube面を向いているため、直接右回転します", adsk.core.LogLevels.InfoLogLevel)
         self._rotate_screen_by_angle(90.0)
     
     def smart_rotate_left(self) -> None:
-        """スマート左回転：ViewCube面でない場合は最寄り面に移動してから90度回転"""
-        if not self._is_on_viewcube_face():
-            futil.log("現在ViewCube面を向いていないため、最寄り面に移動してから回転します", adsk.core.LogLevels.InfoLogLevel)
+        """スマート左回転：ArbitraryViewOrientation（任意の向き）の場合は最寄り面に移動してから90度回転"""
+        is_on_face = self._is_on_viewcube_face()
+        if not is_on_face:
+            futil.log("現在任意の向き（ArbitraryViewOrientation）のため、最寄りViewCube面に移動してから左回転します", adsk.core.LogLevels.InfoLogLevel)
             self._move_to_nearest_viewcube_face()
             # 少し待ってから回転（カメラの移動完了を待つ）
             import time
             time.sleep(0.1)
+        else:
+            futil.log("現在標準ViewCube面を向いているため、直接左回転します", adsk.core.LogLevels.InfoLogLevel)
         self._rotate_screen_by_angle(-90.0)
     
     def rotate_screen_up(self) -> None:
@@ -517,24 +373,64 @@ class CameraController:
         self._rotate_screen_vertical_by_angle(-90.0)
     
     def smart_rotate_up(self) -> None:
-        """スマート上回転：ViewCube面でない場合は最寄り面に移動してから90度回転"""
-        if not self._is_on_viewcube_face():
-            futil.log("現在ViewCube面を向いていないため、最寄り面に移動してから回転します", adsk.core.LogLevels.InfoLogLevel)
+        """スマート上回転：ArbitraryViewOrientation（任意の向き）の場合は最寄り面に移動してから90度回転"""
+        is_on_face = self._is_on_viewcube_face()
+        if not is_on_face:
+            futil.log("現在任意の向き（ArbitraryViewOrientation）のため、最寄りViewCube面に移動してから上回転します", adsk.core.LogLevels.InfoLogLevel)
             self._move_to_nearest_viewcube_face()
             # 少し待ってから回転（カメラの移動完了を待つ）
             import time
             time.sleep(0.1)
+        else:
+            futil.log("現在標準ViewCube面を向いているため、直接上回転します", adsk.core.LogLevels.InfoLogLevel)
         self._rotate_screen_vertical_by_angle(90.0)
     
     def smart_rotate_down(self) -> None:
-        """スマート下回転：ViewCube面でない場合は最寄り面に移動してから90度回転"""
-        if not self._is_on_viewcube_face():
-            futil.log("現在ViewCube面を向いていないため、最寄り面に移動してから回転します", adsk.core.LogLevels.InfoLogLevel)
+        """スマート下回転：ArbitraryViewOrientation（任意の向き）の場合は最寄り面に移動してから90度回転"""
+        is_on_face = self._is_on_viewcube_face()
+        if not is_on_face:
+            futil.log("現在任意の向き（ArbitraryViewOrientation）のため、最寄りViewCube面に移動してから下回転します", adsk.core.LogLevels.InfoLogLevel)
             self._move_to_nearest_viewcube_face()
             # 少し待ってから回転（カメラの移動完了を待つ）
             import time
             time.sleep(0.1)
+        else:
+            futil.log("現在標準ViewCube面を向いているため、直接下回転します", adsk.core.LogLevels.InfoLogLevel)
         self._rotate_screen_vertical_by_angle(-90.0)
+    
+    def rotate_screen_clockwise(self) -> None:
+        """画面垂直方向（画面Z軸周り）に時計回りに90度回転"""
+        self._rotate_screen_z_by_angle(90.0)
+    
+    def rotate_screen_counter_clockwise(self) -> None:
+        """画面垂直方向（画面Z軸周り）に反時計回りに90度回転"""
+        self._rotate_screen_z_by_angle(-90.0)
+    
+    def smart_rotate_clockwise(self) -> None:
+        """スマート垂直時計回り回転：ArbitraryViewOrientation（任意の向き）の場合は最寄り面に移動してから90度回転"""
+        is_on_face = self._is_on_viewcube_face()
+        if not is_on_face:
+            futil.log("現在任意の向き（ArbitraryViewOrientation）のため、最寄りViewCube面に移動してから垂直時計回り回転します", adsk.core.LogLevels.InfoLogLevel)
+            self._move_to_nearest_viewcube_face()
+            # 少し待ってから回転（カメラの移動完了を待つ）
+            import time
+            time.sleep(0.1)
+        else:
+            futil.log("現在標準ViewCube面を向いているため、直接垂直時計回り回転します", adsk.core.LogLevels.InfoLogLevel)
+        self._rotate_screen_z_by_angle(90.0)
+    
+    def smart_rotate_counter_clockwise(self) -> None:
+        """スマート垂直反時計回り回転：ArbitraryViewOrientation（任意の向き）の場合は最寄り面に移動してから90度回転"""
+        is_on_face = self._is_on_viewcube_face()
+        if not is_on_face:
+            futil.log("現在任意の向き（ArbitraryViewOrientation）のため、最寄りViewCube面に移動してから垂直反時計回り回転します", adsk.core.LogLevels.InfoLogLevel)
+            self._move_to_nearest_viewcube_face()
+            # 少し待ってから回転（カメラの移動完了を待つ）
+            import time
+            time.sleep(0.1)
+        else:
+            futil.log("現在標準ViewCube面を向いているため、直接垂直反時計回り回転します", adsk.core.LogLevels.InfoLogLevel)
+        self._rotate_screen_z_by_angle(-90.0)
     
     def _rotate_screen_by_angle(self, angle_degrees: float) -> None:
         """ViewCube面の左右矢印と同等の回転（現在のViewCube面を基準とした左右回転）"""
@@ -610,35 +506,17 @@ class CameraController:
             # 世界座標系のZ軸（0, 0, 1）
             world_z = adsk.core.Vector3D.create(0, 0, 1)
             
-            # Z軸特異点（ジンバルロック）の検出
-            # 視線方向がZ軸とほぼ平行な場合
-            import math
-            dot_with_z = abs(view_direction.dotProduct(world_z))
-            is_near_singularity = dot_with_z > 0.95  # 約18度以内
-            
-            if is_near_singularity:
-                # 特異点付近では、画面の水平方向（X軸方向）を回転軸として使用
-                # 現在のup_vectorから水平成分を抽出して回転軸を決定
-                horizontal_up = adsk.core.Vector3D.create(up_vector.x, up_vector.y, 0)
-                if horizontal_up.length > 0.1:
-                    horizontal_up.normalize()
-                    # 水平なup_vectorに垂直な方向を右方向として使用
-                    right_vector = adsk.core.Vector3D.create(-horizontal_up.y, horizontal_up.x, 0)
-                    right_vector.normalize()
-                else:
-                    # 完全に上面または下面を見ている場合、X軸を右方向とする
-                    right_vector = adsk.core.Vector3D.create(1, 0, 0)
+            # ViewCube面の右方向ベクトルを計算（視線方向とup_vectorの外積）
+            right_vector = view_direction.crossProduct(up_vector)
+            # 外積の長さがゼロに近い場合の安全チェック
+            if right_vector.length < 0.01:
+                # 代替として世界座標系のX軸を使用
+                right_vector = adsk.core.Vector3D.create(1, 0, 0)
             else:
-                # 通常の場合：ViewCube面の右方向ベクトルを計算（視線方向とup_vectorの外積）
-                right_vector = view_direction.crossProduct(up_vector)
-                # 外積の長さがゼロに近い場合の安全チェック
-                if right_vector.length < 0.01:
-                    # 代替として世界座標系のX軸を使用
-                    right_vector = adsk.core.Vector3D.create(1, 0, 0)
-                else:
-                    right_vector.normalize()
+                right_vector.normalize()
             
             # 角度をラジアンに変換
+            import math
             angle_radians = math.radians(angle_degrees)
             
             # 右方向軸周りにeyeの位置を回転
@@ -655,18 +533,6 @@ class CameraController:
             # 新しいup_vectorも同じ軸周りに回転
             rotated_up = rotation_quaternion.transform_vector(up_vector)
             
-            # 水平保持：Z成分をリセットして水平を保つ（ユーザー要求）
-            # ただし、完全な上下逆転は許容する
-            if not is_near_singularity:
-                # 通常時は水平保持のためZ成分の大幅な変化を制限
-                if abs(rotated_up.z) < 0.7:  # 45度以下の傾きの場合のみ水平化
-                    rotated_up.z = 0
-                    if rotated_up.length > 0.01:
-                        rotated_up.normalize()
-                    else:
-                        # 安全のため、元のup_vectorを使用
-                        rotated_up = up_vector
-            
             # 新しいカメラパラメータを設定
             camera.eye = new_eye
             camera.target = target
@@ -677,14 +543,69 @@ class CameraController:
             viewport.camera = camera
             viewport.refresh()
             
-            futil.log(f"ViewCube面を基準に上下{angle_degrees}度回転しました（特異点対応: {is_near_singularity}）", adsk.core.LogLevels.InfoLogLevel)
+            futil.log(f"ViewCube面を基準に上下{angle_degrees}度回転しました", adsk.core.LogLevels.InfoLogLevel)
             
         except Exception as e:
             futil.log(f'ViewCube面上下回転に失敗しました: {str(e)}', adsk.core.LogLevels.ErrorLogLevel)
             futil.log(traceback.format_exc(), adsk.core.LogLevels.ErrorLogLevel)
     
-    def _is_on_viewcube_face(self, tolerance: float = 0.9) -> bool:
-        """現在の視点がViewCube面に近いかどうかを判定する"""
+    def _rotate_screen_z_by_angle(self, angle_degrees: float) -> None:
+        """画面垂直方向（画面のZ軸周り）に指定角度回転する
+        
+        Args:
+            angle_degrees: 回転角度（度数法）。正の値で時計回り、負の値で反時計回り
+        """
+        try:
+            viewport = app.activeViewport
+            if not viewport:
+                futil.log("No active viewport found.", adsk.core.LogLevels.WarningLogLevel)
+                return
+            
+            camera = viewport.camera
+            if not camera:
+                futil.log("No active camera found.", adsk.core.LogLevels.WarningLogLevel)
+                return
+            
+            # 現在のカメラパラメータを取得
+            eye = camera.eye
+            target = camera.target
+            up_vector = camera.upVector
+            
+            # 視線方向ベクトルを計算（カメラから見た前方向）
+            view_direction = eye.vectorTo(target)
+            view_direction.normalize()
+            
+            # 角度をラジアンに変換
+            import math
+            angle_radians = math.radians(angle_degrees)
+            
+            # 視線方向軸周りにup_vectorを回転
+            rotation_quaternion = Quaternion.from_axis_angle(view_direction, angle_radians)
+            
+            # up_vectorを回転
+            rotated_up = rotation_quaternion.transform_vector(up_vector)
+            
+            # 新しいカメラパラメータを設定（eyeとtargetは変更せず、up_vectorのみ回転）
+            camera.eye = eye
+            camera.target = target
+            camera.upVector = rotated_up
+            
+            # スムースな移動を有効にして適用
+            camera.isSmoothTransition = True
+            viewport.camera = camera
+            viewport.refresh()
+            
+            futil.log(f"画面垂直方向（Z軸周り）に{angle_degrees}度回転しました", adsk.core.LogLevels.InfoLogLevel)
+            
+        except Exception as e:
+            futil.log(f'画面垂直方向回転に失敗しました: {str(e)}', adsk.core.LogLevels.ErrorLogLevel)
+            futil.log(traceback.format_exc(), adsk.core.LogLevels.ErrorLogLevel)
+    
+    def _is_on_viewcube_face(self) -> bool:
+        """現在の視点がViewCube面に向いているかどうかを判定する
+        
+        Camera.viewOrientationを使用してArbitraryViewOrientation（値:0）でないかをチェック
+        """
         try:
             viewport = app.activeViewport
             if not viewport:
@@ -694,29 +615,35 @@ class CameraController:
             if not camera:
                 return False
             
-            # カメラの視線方向ベクトルを取得
-            eye = camera.eye
-            target = camera.target
-            view_direction = target.vectorTo(eye)
-            view_direction.normalize()
+            # Camera.viewOrientationで現在の向きを取得
+            current_orientation = camera.viewOrientation
             
-            # 標準的なViewCube面の方向ベクトル
-            standard_directions = [
-                adsk.core.Vector3D.create(0, -1, 0),  # 前面
-                adsk.core.Vector3D.create(0, 1, 0),   # 背面
-                adsk.core.Vector3D.create(-1, 0, 0),  # 左面
-                adsk.core.Vector3D.create(1, 0, 0),   # 右面
-                adsk.core.Vector3D.create(0, 0, 1),   # 上面
-                adsk.core.Vector3D.create(0, 0, -1)   # 下面
-            ]
+            # ArbitraryViewOrientation（値:0）でない場合は標準的なViewCube面を向いている
+            is_on_standard_face = current_orientation != adsk.core.ViewOrientations.ArbitraryViewOrientation
             
-            # いずれかの面と十分に近い方向を向いているかチェック
-            for direction in standard_directions:
-                dot_product = view_direction.dotProduct(direction)
-                if dot_product > tolerance:
-                    return True
+            # デバッグ情報を出力
+            orientation_names = {
+                adsk.core.ViewOrientations.ArbitraryViewOrientation: "任意の向き",
+                adsk.core.ViewOrientations.BackViewOrientation: "背面",
+                adsk.core.ViewOrientations.BottomViewOrientation: "下面", 
+                adsk.core.ViewOrientations.FrontViewOrientation: "前面",
+                adsk.core.ViewOrientations.IsoBottomLeftViewOrientation: "アイソ下左",
+                adsk.core.ViewOrientations.IsoBottomRightViewOrientation: "アイソ下右",
+                adsk.core.ViewOrientations.IsoTopLeftViewOrientation: "アイソ上左",
+                adsk.core.ViewOrientations.IsoTopRightViewOrientation: "アイソ上右",
+                adsk.core.ViewOrientations.LeftViewOrientation: "左面",
+                adsk.core.ViewOrientations.RightViewOrientation: "右面",
+                adsk.core.ViewOrientations.TopViewOrientation: "上面"
+            }
             
-            return False
+            orientation_name = orientation_names.get(current_orientation, f"不明({current_orientation})")
+            
+            if config.DEBUG:
+                futil.log(f"ViewCube面判定: 現在の向き={orientation_name}({current_orientation}), "
+                         f"判定={'標準面向き' if is_on_standard_face else '任意の向き'}", 
+                         adsk.core.LogLevels.InfoLogLevel)
+            
+            return is_on_standard_face
             
         except Exception as e:
             futil.log(f'ViewCube面判定でエラー: {str(e)}', adsk.core.LogLevels.WarningLogLevel)
