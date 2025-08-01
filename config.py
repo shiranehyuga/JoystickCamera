@@ -81,6 +81,10 @@ AVAILABLE_FUNCTIONS = [
     ("画面下回転90度", "rotate_screen_down"),
     ("スマート上回転90度", "smart_rotate_up"),
     ("スマート下回転90度", "smart_rotate_down"),
+    ("画面垂直時計回り90度", "rotate_screen_clockwise"),
+    ("画面垂直反時計回り90度", "rotate_screen_counter_clockwise"),
+    ("スマート垂直時計回り90度", "smart_rotate_clockwise"),
+    ("スマート垂直反時計回り90度", "smart_rotate_counter_clockwise"),
 ]
 
 # 設定ファイルのパス
